@@ -1,0 +1,42 @@
+Package: spatiocompo
+Title: Bayesian Spatial Compositional Data Modeling
+Version: 0.1.0
+Authors@R: c(
+    person("Behnaz", "Pirzamanbin",
+           email = "behnaz.pirzamanbin@stat.lu.se",
+           role = c("aut", "cre")),
+    person("Johan", "Lindstrom",
+           role = "aut"))
+Author: Behnaz Pirzamanbin [aut, cre], Johan Lindstrom [aut]
+Maintainer: Behnaz Pirzamanbin <behnaz.pirzamanbin@stat.lu.se>
+Description: Bayesian spatial compositional data modeling using Gaussian
+    Markov Random Fields (GMRF) with Dirichlet likelihood. Implements
+    Metropolis-Adjusted Langevin Algorithm (MALA) and Gibbs sampling for
+    posterior inference. The package provides tools for analyzing spatially
+    referenced compositional data such as land cover proportions, with
+    support for covariates and observation weights.
+License: GPL-3 + file LICENSE
+URL: https://github.com/BehnazP/spatiocompo-r
+BugReports: https://github.com/BehnazP/spatiocompo-r/issues
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    Matrix (>= 1.5-0),
+    stats,
+    graphics,
+    grDevices,
+    utils
+Suggests:
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    ggplot2,
+    coda,
+    numDeriv,
+    maps
+Config/testthat/edition: 3
+VignetteBuilder: knitr
+LazyData: true
+Depends:
+    R (>= 3.5.0)

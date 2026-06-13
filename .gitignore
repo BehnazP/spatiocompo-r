@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# R
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# R package build artifacts
+*.tar.gz
+*.Rcheck/
+inst/doc
+
+# Editors / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

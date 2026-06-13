@@ -1,0 +1,17 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^LICENSE\.md$
+^README\.Rmd$
+^data-raw$
+^\.github$
+^codecov\.yml$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^\\.Rcheck$
+^\\.\\.Rcheck$
+^CHANGELOG\.md$
+^TESTING_PLAN\.md$
+^contrib\.url$
+^doc$
+^Meta$

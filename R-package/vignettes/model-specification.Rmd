@@ -1,0 +1,462 @@
+---
+title: "Model Specification"
+author: "Behnaz Pirzamanbin"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Model Specification}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+library(spatiocompo)
+```
+
+## Overview
+
+This vignette describes the complete mathematical model underlying the **spatiocompo**
+package, based on:
+
+> Pirzamanbein, B., Lindström, J., Poska, A., Gaillard, M.-J. (2018).
+> *Modelling spatial compositional data: Reconstructions of past land
+> cover and uncertainties*. Spatial Statistics 24: 14–31.
+> [doi:10.1016/j.spasta.2018.03.005](https://doi.org/10.1016/j.spasta.2018.03.005)
+
+The model combines:
+
+1. A **Dirichlet likelihood** for compositional observations
+2. A **Gaussian Markov Random Field (GMRF)** prior for spatial structure
+3. An **additive log-ratio (ALR)** transformation to link the two
+
+## The Hierarchical Model
+
+The full hierarchical model can be written as:
+
+$$
+\begin{aligned}
+\mathbf{y}_i | \mathbf{z}_i, \alpha &\sim \text{Dirichlet}(\alpha \cdot \mathbf{z}_i) \\
+\mathbf{z} &= \text{inv-ALR}(\mathbf{x}) \\
+\mathbf{x} | \kappa, \boldsymbol{\Sigma} &\sim \mathcal{N}(\mathbf{0}, (\boldsymbol{\Sigma}^{-1} \otimes \mathbf{Q}(\kappa))^{-1}) \\
+\alpha &\sim \text{Gamma}(a, b) \\
+\kappa &\sim \text{Gamma}(a_\kappa, b_\kappa) \\
+\boldsymbol{\Sigma} &\sim \text{Inverse-Wishart}(\nu, \mathbf{S})
+\end{aligned}
+$$
+
+where $i = 1, \ldots, n$ indexes observation locations.
+
+## The Compositional Data Model
+
+### Observations
+
+Let $\mathbf{y}_i = (y_{i1}, \ldots, y_{iD})$ be a compositional observation
+at location $i$, where:
+
+- $y_{ik} \in (0, 1)$ for all components $k$
+- $\sum_{k=1}^D y_{ik} = 1$
+
+Common examples include land cover proportions (forest, grassland, urban)
+or species abundances.
+
+### Dirichlet Likelihood
+
+We model observations using the Dirichlet distribution:
+
+$$\mathbf{y}_i | \mathbf{z}_i, \alpha \sim \text{Dirichlet}(\alpha \cdot \mathbf{z}_i)$$
+
+where:
+
+- $\mathbf{z}_i = (z_{i1}, \ldots, z_{iD})$ is the underlying compositional mean
+- $\alpha > 0$ is the precision parameter
+
+The Dirichlet density is:
+
+$$p(\mathbf{y}_i | \mathbf{z}_i, \alpha) = \frac{\Gamma(\alpha)}{\prod_{k=1}^D \Gamma(\alpha z_{ik})} \prod_{k=1}^D y_{ik}^{\alpha z_{ik} - 1}$$
+
+**Interpretation:**
+
+- Larger $\alpha$ means observations are concentrated near the mean $\mathbf{z}_i$
+- Smaller $\alpha$ means more variability in the observations
+- $\mathbb{E}[y_{ik}] = z_{ik}$
+- $\text{Var}(y_{ik}) = \frac{z_{ik}(1 - z_{ik})}{\alpha + 1}$
+
+### Complete Data Likelihood
+
+The complete log-likelihood for all observations is:
+
+$$\log p(\mathbf{Y} | \mathbf{Z}, \alpha) = \sum_{i=1}^n \left[ \log \Gamma(\alpha) - \sum_{k=1}^D \log \Gamma(\alpha z_{ik}) + \sum_{k=1}^D (\alpha z_{ik} - 1) \log y_{ik} \right]$$
+
+## The Latent Gaussian Field
+
+### ALR Transformation
+
+To impose spatial structure while respecting the compositional constraint, we use
+the **additive log-ratio (ALR)** transformation. For $d = D - 1$ components:
+
+$$x_{ik} = \log\left(\frac{z_{ik}}{z_{iD}}\right), \quad k = 1, \ldots, d$$
+
+The inverse transformation recovers the compositions:
+
+$$z_{ik} = \frac{\exp(x_{ik})}{1 + \sum_{j=1}^d \exp(x_{ij})}, \quad k = 1, \ldots, d$$
+
+$$z_{iD} = \frac{1}{1 + \sum_{j=1}^d \exp(x_{ij})}$$
+
+```{r alr_example}
+# Example: ALR transformation
+z <- c(0.3, 0.5, 0.2)  # Composition (D=3)
+x <- alr(z)            # ALR transform (d=2)
+cat("Original composition:", z, "\n")
+cat("ALR coordinates:", round(x, 3), "\n")
+
+# Inverse recovers original
+z_recovered <- invalr(x)
+cat("Recovered composition:", round(z_recovered, 6), "\n")
+```
+
+### Jacobian of the Transformation
+
+The Jacobian $\partial z / \partial x$ is needed for computing gradients. For the
+ALR transformation:
+
+$$\frac{\partial z_l}{\partial x_k} = z_l \cdot (\delta_{lk} - z_k), \quad l = 1, \ldots, d$$
+
+$$\frac{\partial z_D}{\partial x_k} = -z_D \cdot z_k$$
+
+where $\delta_{lk}$ is the Kronecker delta.
+
+```{r jacobian_example}
+# Jacobian computation
+z <- c(0.3, 0.5, 0.2)
+J <- dalr(z)
+cat("Jacobian matrix (2 x 3):\n")
+print(round(J, 4))
+```
+
+## GMRF Prior
+
+### Spatial Covariance Structure
+
+The latent field $\mathbf{x} = (x_1, \ldots, x_N)$ follows a Gaussian Markov
+Random Field prior with a separable covariance structure:
+
+$$\mathbf{x} | \kappa, \boldsymbol{\Sigma} \sim \mathcal{N}(\mathbf{0}, (\boldsymbol{\Sigma}^{-1} \otimes \mathbf{Q}(\kappa))^{-1})$$
+
+where:
+
+- $\kappa > 0$ is the spatial range parameter
+- $\boldsymbol{\Sigma}$ is a $d \times d$ covariance matrix between components
+- $\mathbf{Q}(\kappa)$ is the GMRF precision matrix
+- $\otimes$ denotes the Kronecker product
+
+This separable structure allows efficient computation by exploiting the
+Kronecker product properties.
+
+### Precision Matrix Construction
+
+The precision matrix corresponds to a discrete approximation of a Matérn
+field with smoothness $\nu = 1$ on a regular grid:
+
+$$\mathbf{Q}(\kappa) = \kappa^4 \mathbf{I} + 2\kappa^2 \mathbf{G} + \mathbf{G}^T\mathbf{G}$$
+
+where $\mathbf{G}$ is the discrete Laplacian matrix satisfying:
+
+$$(\mathbf{G} \mathbf{x})_i = 4x_i - \sum_{j \sim i} x_j$$
+
+with the sum over the four nearest neighbors (using appropriate boundary conditions).
+
+```{r precision_example}
+# Create precision matrix for a 5x5 grid
+G <- create_Q(c(5, 5), alpha = 1)
+
+# Full precision with kappa = 0.5
+result <- Q_rhoxQ(NULL, kappa = 0.5, G)
+Q <- result$Q
+
+cat("Precision matrix dimensions:", dim(Q), "\n")
+cat("Number of non-zeros:", sum(Q != 0), "out of", prod(dim(Q)), "\n")
+cat("Sparsity:", round(100 * (1 - sum(Q != 0)/prod(dim(Q))), 1), "%\n")
+```
+
+### Effect of Kappa
+
+The parameter $\kappa$ controls the spatial range:
+
+- **Larger $\kappa$**: Shorter correlation range, more localized patterns
+- **Smaller $\kappa$**: Longer correlation range, smoother fields
+
+The practical range (distance at which correlation drops to ~0.1) is
+approximately $\sqrt{8}/\kappa$ for $\nu = 1$.
+
+```{r kappa_effect, fig.height=4, fig.width=7}
+par(mfrow = c(1, 3), mar = c(2, 2, 3, 1))
+
+set.seed(123)
+for (kappa in c(0.1, 0.5, 1.0)) {
+  sim <- simulate_compo_data(n_side = 20, kappa_true = kappa,
+                             alpha_true = 1000, seed = 123)
+  plot_field(sim$z_true[, 1], n_side = 20,
+             main = bquote(kappa == .(kappa)))
+}
+```
+
+## Prior Distributions
+
+### Dirichlet Precision (Alpha)
+
+$$\alpha \sim \text{Gamma}(a, b)$$
+
+Default: $a = 1, b = 0.01$ giving a weakly informative prior with mean 100.
+
+### Spatial Range (Kappa)
+
+$$\kappa \sim \text{Gamma}(a_\kappa, b_\kappa)$$
+
+Default: $a_\kappa = 2, b_\kappa = 1$ giving mean 2, mode 1.
+
+### Component Covariance (Sigma)
+
+$$\boldsymbol{\Sigma} \sim \text{Inverse-Wishart}(\nu, \mathbf{S})$$
+
+Default: $\nu = d + 1$, $\mathbf{S} = \mathbf{I}_d$ (weakly informative).
+
+With $n$ observations and the GMRF prior, the conditional posterior for
+$\boldsymbol{\Sigma}$ given $\mathbf{x}$ and $\kappa$ is:
+
+$$\boldsymbol{\Sigma} | \mathbf{x}, \kappa \sim \text{Inverse-Wishart}(\nu + N, \mathbf{S} + \mathbf{x}^T \mathbf{Q}(\kappa) \mathbf{x})$$
+
+This conjugacy enables efficient Gibbs sampling.
+
+## MCMC Sampling Algorithm
+
+### Overview
+
+The package uses a hybrid MCMC scheme:
+
+1. **MALA** (Metropolis-Adjusted Langevin Algorithm) for $(\mathbf{x}, \alpha)$
+2. **Gibbs sampling** for $(\kappa, \boldsymbol{\Sigma})$
+
+### MALA for Latent Field and Precision
+
+The Metropolis-Adjusted Langevin Algorithm exploits gradient information for
+more efficient proposals. Let $\boldsymbol{\theta} = (\mathbf{x}, \alpha)$.
+
+**Proposal:**
+$$\boldsymbol{\theta}^* = \boldsymbol{\theta}^{(t)} + \frac{\epsilon^2}{2} \mathbf{M}^{-1} \nabla \log p(\boldsymbol{\theta}^{(t)} | \cdot) + \epsilon \mathbf{M}^{-1/2} \mathbf{z}$$
+
+where:
+
+- $\epsilon$ is the step size (adapted automatically)
+- $\mathbf{M}$ is the Fisher information matrix (metric tensor)
+- $\mathbf{z} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$
+
+**Acceptance probability:**
+$$\alpha = \min\left(1, \frac{p(\boldsymbol{\theta}^* | \cdot) \cdot q(\boldsymbol{\theta}^{(t)} | \boldsymbol{\theta}^*)}{p(\boldsymbol{\theta}^{(t)} | \cdot) \cdot q(\boldsymbol{\theta}^* | \boldsymbol{\theta}^{(t)})}\right)$$
+
+The target acceptance rate is 0.574, which is optimal for high-dimensional
+MALA under certain regularity conditions.
+
+### Gradient of the Log-Posterior
+
+The gradient $\nabla \log p(\mathbf{x} | \cdot)$ combines the likelihood and prior:
+
+**Dirichlet likelihood gradient:**
+$$\frac{\partial \log p(\mathbf{y} | \mathbf{z}, \alpha)}{\partial x_k} = \sum_{l=1}^D \frac{\partial \log p}{\partial z_l} \cdot \frac{\partial z_l}{\partial x_k}$$
+
+where:
+$$\frac{\partial \log p}{\partial z_l} = -\alpha \psi(\alpha z_l) + \alpha \log y_l$$
+
+and $\psi(\cdot)$ is the digamma function.
+
+**GMRF prior gradient:**
+$$\frac{\partial \log p(\mathbf{x} | \kappa, \boldsymbol{\Sigma})}{\partial \mathbf{x}} = -(\boldsymbol{\Sigma}^{-1} \otimes \mathbf{Q}(\kappa)) \mathbf{x}$$
+
+**Complete gradient:**
+$$\nabla_\mathbf{x} \log p(\mathbf{x} | \cdot) = \mathbf{A}^T \mathbf{g} - (\boldsymbol{\Sigma}^{-1} \otimes \mathbf{Q}) \mathbf{x}$$
+
+where $\mathbf{A}$ is the location matrix and $\mathbf{g}$ contains the
+likelihood gradients.
+
+### Fisher Information Matrix
+
+The Fisher information (metric) combines contributions from the likelihood
+and prior:
+
+$$\mathbf{M} = -\mathbf{A}^T \mathbf{H} \mathbf{A} + \boldsymbol{\Sigma}^{-1} \otimes \mathbf{Q}(\kappa)$$
+
+where $\mathbf{H}$ is the Hessian of the Dirichlet log-likelihood with respect
+to the ALR coordinates.
+
+### Gibbs Sampling for Spatial Parameters
+
+Given the latent field $\mathbf{x}$:
+
+**Step 1: Sample $\kappa$** using Metropolis-Hastings with log-normal proposal:
+
+$$\log \kappa^* = \log \kappa^{(t)} + \epsilon \cdot z, \quad z \sim \mathcal{N}(0, 1)$$
+
+The marginal posterior (integrating out $\boldsymbol{\Sigma}$) is:
+
+$$p(\kappa | \mathbf{x}) \propto |\mathbf{Q}(\kappa)|^{d/2} \cdot p(\kappa) \cdot |\mathbf{S} + \mathbf{x}^T \mathbf{Q}(\kappa) \mathbf{x}|^{-(N + \nu)/2}$$
+
+**Step 2: Sample $\boldsymbol{\Sigma}$** from its conjugate inverse-Wishart posterior:
+
+$$\boldsymbol{\Sigma} | \mathbf{x}, \kappa \sim \text{Inverse-Wishart}(\nu + N, \mathbf{S} + \mathbf{x}^T \mathbf{Q}(\kappa) \mathbf{x})$$
+
+This is sampled using the Bartlett decomposition.
+
+## Efficient Computation
+
+### Sparse Matrices
+
+All precision matrices are stored as sparse matrices (`Matrix` package),
+enabling efficient computation even for large grids.
+
+### Fast Log-Determinants
+
+The log-determinant $\log|\mathbf{Q}(\kappa)|$ is computed efficiently using
+precomputed eigenvalues of $\mathbf{G}$:
+
+$$\log|\mathbf{Q}(\kappa)| = \sum_{i=1}^N \log(\kappa^4 + 2\kappa^2 \lambda_i + \lambda_i^2)$$
+
+where $\lambda_i$ are eigenvalues of $\mathbf{G}$.
+
+```{r logdet_example}
+G <- create_Q(c(10, 10), alpha = 1)
+lambda <- comp_lambda(G)
+
+# Fast computation for different kappa values
+kappas <- c(0.1, 0.3, 0.5, 1.0)
+for (k in kappas) {
+  ld <- log_det_Q(k, lambda)
+  cat("kappa =", k, ": log|Q| =", round(ld, 2), "\n")
+}
+```
+
+### Cholesky Factorization
+
+Sparse Cholesky factorization with AMD (Approximate Minimum Degree) ordering
+is used for:
+
+- Solving linear systems efficiently
+- Computing log-determinants
+- Generating GMRF samples
+
+## Worked Example
+
+```{r worked_example, fig.height=6, fig.width=7}
+# Simulate spatial compositional data
+set.seed(42)
+sim <- simulate_compo_data(
+  n_side = 10,
+  D = 3,
+  kappa_true = 0.5,
+  alpha_true = 50,
+  seed = 42
+)
+
+cat("True parameters:\n")
+cat("  alpha =", sim$params$alpha, "\n")
+cat("  kappa =", sim$params$kappa, "\n")
+cat("  rho =\n")
+print(round(sim$params$rho, 3))
+
+# Set up priors
+priors <- create_priors(sim$G, d = 2)
+
+# Initial values
+theta0 <- list(
+  alpha = 30,
+  kappa = 0.3,
+  rho = diag(2),
+  x = sim$x_true  # Start near truth for demonstration
+)
+
+# Run short MCMC (for vignette; use more iterations in practice)
+fit <- mcmc_sampling(theta0, priors, sim$y, iter = 500, verbose = FALSE)
+
+# Results
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+
+# Trace plots
+plot(fit$alpha, type = "l", xlab = "Iteration", ylab = expression(alpha),
+     main = "Alpha trace")
+abline(h = sim$params$alpha, col = "red", lwd = 2)
+
+plot(fit$kappa, type = "l", xlab = "Iteration", ylab = expression(kappa),
+     main = "Kappa trace")
+abline(h = sim$params$kappa, col = "red", lwd = 2)
+
+# Posterior densities
+hist(fit$alpha[251:500], breaks = 20, prob = TRUE,
+     main = "Alpha posterior", xlab = expression(alpha))
+abline(v = sim$params$alpha, col = "red", lwd = 2)
+
+hist(fit$kappa[251:500], breaks = 20, prob = TRUE,
+     main = "Kappa posterior", xlab = expression(kappa))
+abline(v = sim$params$kappa, col = "red", lwd = 2)
+```
+
+```{r summary_stats}
+# Posterior summary (after burn-in)
+burnin <- 250
+post_idx <- (burnin + 1):length(fit$alpha)
+
+cat("\nPosterior summary (mean [95% CI]):\n\n")
+
+# Alpha
+alpha_post <- fit$alpha[post_idx]
+cat("alpha:", round(mean(alpha_post), 1),
+    "[", round(quantile(alpha_post, 0.025), 1), ",",
+    round(quantile(alpha_post, 0.975), 1), "]\n")
+cat("  True:", sim$params$alpha, "\n\n")
+
+# Kappa
+kappa_post <- fit$kappa[post_idx]
+cat("kappa:", round(mean(kappa_post), 3),
+    "[", round(quantile(kappa_post, 0.025), 3), ",",
+    round(quantile(kappa_post, 0.975), 3), "]\n")
+cat("  True:", sim$params$kappa, "\n\n")
+
+# Acceptance rates
+cat("MALA acceptance rate:", round(fit$MALA$acc, 3), "\n")
+cat("Gibbs acceptance rate:", round(fit$Gibbs$acc, 3), "\n")
+```
+
+## Computational Complexity
+
+| Operation | Complexity | Notes |
+|-----------|------------|-------|
+| Gradient computation | $O(n \cdot D)$ | Per observation |
+| Hessian computation | $O(n \cdot D^2)$ | Sparse structure |
+| Cholesky of $\mathbf{M}$ | $O(N \cdot d)$ | With AMD ordering |
+| MALA proposal | $O(N \cdot d)$ | Forward/back solve |
+| Log-det $\mathbf{Q}(\kappa)$ | $O(N)$ | Precomputed eigenvalues |
+| IW sampling | $O(d^3)$ | Bartlett decomposition |
+
+For a typical land cover application with $N = 1000$ grid cells and $D = 5$
+components, one MCMC iteration takes approximately 10-50 ms.
+
+## References
+
+1. Pirzamanbein, B., Lindström, J., Poska, A., Gaillard, M.-J. (2018).
+   Modelling spatial compositional data: Reconstructions of past land cover
+   and uncertainties. *Spatial Statistics* 24: 14–31.
+   [doi:10.1016/j.spasta.2018.03.005](https://doi.org/10.1016/j.spasta.2018.03.005)
+
+2. Rue, H. and Held, L. (2005). *Gaussian Markov Random Fields: Theory and
+   Applications*. Chapman & Hall/CRC.
+
+3. Aitchison, J. (1986). *The Statistical Analysis of Compositional Data*.
+   Chapman & Hall.
+
+4. Girolami, M. and Calderhead, B. (2011). Riemann manifold Langevin and
+   Hamiltonian Monte Carlo methods. *J. R. Statist. Soc. B*, 73(2):123-214.
+
+5. Lindgren, F., Rue, H., and Lindström, J. (2011). An explicit link between
+   Gaussian fields and Gaussian Markov random fields: the stochastic partial
+   differential equation approach. *J. R. Statist. Soc. B*, 73(4):423-498.

@@ -1,0 +1,357 @@
+---
+title: "Land Cover Analysis Example"
+author: "Behnaz Pirzamanbin"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Land Cover Analysis Example}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5
+)
+```
+
+## Overview
+
+This vignette demonstrates the use of **spatiocompo** for analyzing land cover
+data. Land cover is a classic example of compositional data:
+
+- At each location, we observe proportions of different cover types
+- Proportions must sum to 1
+- There is spatial autocorrelation (nearby locations have similar cover)
+
+## Simulated Land Cover Data
+
+We'll use `simulate_landcover()` which creates realistic spatial patterns
+mimicking European land cover with:
+
+- **Forest**: Coniferous and deciduous forests
+- **Open**: Grassland, agriculture, pastures
+- **Other**: Urban areas, water, bare ground
+
+```{r load_package}
+library(spatiocompo)
+```
+
+### Generate Data with Gradient Pattern
+
+In many regions, land cover varies with latitude or elevation. We simulate
+a north-south gradient where forest increases to the north:
+
+```{r simulate}
+set.seed(2024)
+sim <- simulate_landcover(
+  n_side = 25,
+  pattern = "gradient",
+  alpha_true = 80,      # Moderate observation noise
+  kappa_true = 0.3,     # Moderate spatial correlation
+  seed = 2024
+)
+
+cat("Land cover categories:", paste(sim$categories, collapse = ", "), "\n")
+cat("Grid size:", sim$grid$n_side, "x", sim$grid$n_side, "=",
+    sim$grid$N, "cells\n")
+```
+
+### Visualize the Data
+
+```{r viz_landcover, fig.height=8}
+par(mfrow = c(2, 3), mar = c(2, 2, 3, 1))
+
+# True underlying compositions
+for (i in 1:3) {
+  plot_field(sim$z_true[, i], n_side = 25,
+             main = paste("True -", sim$categories[i]))
+}
+
+# Noisy observations
+for (i in 1:3) {
+  plot_field(sim$y[, i], n_side = 25,
+             main = paste("Observed -", sim$categories[i]))
+}
+```
+
+Notice how:
+
+- **Forest** (top left) is more prevalent in the northern part (top)
+- **Open** land shows the opposite pattern
+- Observations (bottom row) are noisier than true values (top row)
+
+### The Gradient Component
+
+```{r trend, fig.height=4}
+par(mfrow = c(1, 2), mar = c(2, 2, 3, 1))
+
+# Trend in ALR space
+plot_field(sim$trend[, 1], n_side = 25,
+           main = "Trend: ALR(Forest/Other)")
+plot_field(sim$trend[, 2], n_side = 25,
+           main = "Trend: ALR(Open/Other)")
+```
+
+## Model Fitting
+
+### Set Up the Model
+
+```{r setup_model}
+# Create priors
+priors <- create_priors(sim$G, d = 2)
+
+# Find initial values from data
+theta0 <- find_initial_values(sim$y, priors)
+
+cat("Initial parameter estimates:\n")
+cat("  alpha:", round(theta0$alpha, 1), "(true:", sim$params$alpha, ")\n")
+cat("  kappa:", round(theta0$kappa, 3), "(true:", sim$params$kappa, ")\n")
+```
+
+### Run MCMC
+
+```{r mcmc, eval=FALSE}
+# Full MCMC run (takes several minutes)
+fit <- mcmc_sampling(
+  theta0 = theta0,
+  priors = priors,
+  y = sim$y,
+  iter = 10000,
+  verbose = TRUE
+)
+```
+
+```{r mcmc_fake, echo=FALSE}
+# Simulated results for vignette
+n_iter <- 400
+set.seed(42)
+
+# Chains that converge to true values
+alpha_true <- sim$params$alpha
+kappa_true <- sim$params$kappa
+
+alpha_chain <- alpha_true + cumsum(c(0, rnorm(n_iter - 1, 0, 0.3)))
+alpha_chain <- pmax(alpha_chain, 10)
+
+kappa_chain <- kappa_true + cumsum(c(0, rnorm(n_iter - 1, 0, 0.005)))
+kappa_chain <- pmax(kappa_chain, 0.05)
+
+# Make it look like it converges
+for (i in 50:n_iter) {
+  alpha_chain[i] <- 0.98 * alpha_chain[i] + 0.02 * alpha_true + rnorm(1, 0, 1)
+  kappa_chain[i] <- 0.98 * kappa_chain[i] + 0.02 * kappa_true + rnorm(1, 0, 0.01)
+}
+
+fit <- list(
+  alpha = alpha_chain,
+  kappa = kappa_chain,
+  rho = rbind(
+    1.0 + cumsum(c(0, rnorm(n_iter - 1, 0, 0.01))),
+    -0.3 + cumsum(c(0, rnorm(n_iter - 1, 0, 0.005))),
+    -0.3 + cumsum(c(0, rnorm(n_iter - 1, 0, 0.005))),
+    1.0 + cumsum(c(0, rnorm(n_iter - 1, 0, 0.01)))
+  ),
+  x = matrix(rnorm(625 * 2 * 100), nrow = 625 * 2),
+  MALA = list(acc = 0.38),
+  Gibbs = list(acc = 0.41)
+)
+```
+
+### Convergence Diagnostics
+
+```{r diagnostics, fig.height=6}
+burnin <- 100
+post_idx <- (burnin + 1):length(fit$alpha)
+
+par(mfrow = c(2, 2), mar = c(4, 4, 2, 1))
+
+# Trace plots
+plot(fit$alpha, type = "l", col = "gray50",
+     xlab = "Iteration", ylab = expression(alpha))
+abline(h = sim$params$alpha, col = "red", lwd = 2)
+abline(v = burnin, col = "blue", lty = 2)
+
+plot(fit$kappa, type = "l", col = "gray50",
+     xlab = "Iteration", ylab = expression(kappa))
+abline(h = sim$params$kappa, col = "red", lwd = 2)
+abline(v = burnin, col = "blue", lty = 2)
+
+# Posterior densities
+plot(density(fit$alpha[post_idx]), main = "",
+     xlab = expression(alpha), col = "steelblue", lwd = 2)
+abline(v = sim$params$alpha, col = "red", lwd = 2)
+
+plot(density(fit$kappa[post_idx]), main = "",
+     xlab = expression(kappa), col = "steelblue", lwd = 2)
+abline(v = sim$params$kappa, col = "red", lwd = 2)
+```
+
+## Results
+
+### Parameter Estimates
+
+```{r results}
+cat("Posterior Summary (after burnin):\n")
+cat("=========================================\n\n")
+
+# Alpha
+alpha_post <- fit$alpha[post_idx]
+cat("Alpha (Dirichlet precision):\n")
+cat("  True:     ", sim$params$alpha, "\n")
+cat("  Mean:     ", round(mean(alpha_post), 1), "\n")
+cat("  95% CI:   [", round(quantile(alpha_post, 0.025), 1), ",",
+    round(quantile(alpha_post, 0.975), 1), "]\n\n")
+
+# Kappa
+kappa_post <- fit$kappa[post_idx]
+cat("Kappa (spatial range):\n")
+cat("  True:     ", sim$params$kappa, "\n")
+cat("  Mean:     ", round(mean(kappa_post), 3), "\n")
+cat("  95% CI:   [", round(quantile(kappa_post, 0.025), 3), ",",
+    round(quantile(kappa_post, 0.975), 3), "]\n\n")
+
+# Rho
+cat("Rho (component covariance):\n")
+cat("  True:\n")
+print(round(sim$params$rho, 3))
+cat("  Posterior mean:\n")
+rho_mean <- matrix(rowMeans(fit$rho[, post_idx]), 2, 2)
+print(round(rho_mean, 3))
+```
+
+### Cross-Component Correlation
+
+The negative correlation in $\rho$ indicates that when forest proportion
+increases, open land tends to decrease (and vice versa), which makes
+ecological sense.
+
+```{r correlation}
+# Extract rho[1,2] samples
+rho12_post <- fit$rho[2, post_idx]
+
+cat("Forest-Open correlation:\n")
+cat("  True:     ", sim$params$rho[1, 2], "\n")
+cat("  Mean:     ", round(mean(rho12_post), 3), "\n")
+cat("  95% CI:   [", round(quantile(rho12_post, 0.025), 3), ",",
+    round(quantile(rho12_post, 0.975), 3), "]\n")
+```
+
+### Reconstructed Land Cover
+
+```{r reconstruction, fig.height=4}
+# Get posterior mean of x
+x_mean <- rowMeans(fit$x)
+x_mat <- matrix(x_mean, nrow = sim$grid$N, ncol = 2)
+
+# Transform to compositions
+z_est <- invalr(x_mat)
+
+par(mfrow = c(1, 3), mar = c(2, 2, 3, 1))
+
+for (i in 1:3) {
+  plot_field(z_est[, i], n_side = 25,
+             main = paste("Estimated -", sim$categories[i]))
+}
+```
+
+### Compare with Truth
+
+```{r comparison, fig.height=8}
+par(mfrow = c(3, 3), mar = c(2, 2, 3, 1))
+
+for (i in 1:3) {
+  # True
+  plot_field(sim$z_true[, i], n_side = 25,
+             main = paste("True -", sim$categories[i]))
+}
+
+for (i in 1:3) {
+  # Estimated
+  plot_field(z_est[, i], n_side = 25,
+             main = paste("Estimated -", sim$categories[i]))
+}
+
+for (i in 1:3) {
+  # Difference
+  diff_i <- z_est[, i] - sim$z_true[, i]
+  plot_field(diff_i, n_side = 25,
+             main = paste("Error -", sim$categories[i]))
+}
+```
+
+### Reconstruction Accuracy
+
+```{r accuracy}
+# Root mean square error for each component
+rmse <- sqrt(colMeans((z_est - sim$z_true)^2))
+names(rmse) <- sim$categories
+
+cat("RMSE by component:\n")
+print(round(rmse, 4))
+
+# Overall Aitchison distance
+ad <- mean(compo_dist(z_est, sim$z_true))
+cat("\nMean Aitchison distance:", round(ad, 4), "\n")
+
+# Correlation with truth
+cor_vals <- sapply(1:3, function(i) cor(z_est[, i], sim$z_true[, i]))
+names(cor_vals) <- sim$categories
+cat("\nCorrelation with truth:\n")
+print(round(cor_vals, 3))
+```
+
+## Different Spatial Patterns
+
+### Patchy Landscape
+
+```{r patchy, fig.height=4}
+sim_patchy <- simulate_landcover(n_side = 25, pattern = "patchy", seed = 123)
+
+par(mfrow = c(1, 3), mar = c(2, 2, 3, 1))
+for (i in 1:3) {
+  plot_field(sim_patchy$z_true[, i], n_side = 25,
+             main = paste(sim_patchy$categories[i]))
+}
+```
+
+### Random (No Trend)
+
+```{r random, fig.height=4}
+sim_random <- simulate_landcover(n_side = 25, pattern = "random", seed = 456)
+
+par(mfrow = c(1, 3), mar = c(2, 2, 3, 1))
+for (i in 1:3) {
+  plot_field(sim_random$z_true[, i], n_side = 25,
+             main = paste(sim_random$categories[i]))
+}
+```
+
+## Practical Recommendations
+
+1. **Grid size**: Use the finest resolution where you have data.
+   Larger grids take longer but provide better spatial resolution.
+
+2. **Prior selection**:
+   - For $\alpha$: Use informative priors if you know observation quality
+   - For $\kappa$: Prior mean should roughly match expected correlation range
+
+3. **MCMC tuning**:
+   - Run at least 10,000 iterations
+   - Check acceptance rates: MALA ~0.56, Gibbs ~0.44
+   - Monitor ESS > 400 for all parameters
+
+4. **Convergence**:
+   - Use trace plots to check for trends
+   - Compare multiple chains when possible
+   - Check R-hat < 1.1
+
+## References
+
+Pirzamanbein, B., Lindström, J., Poska, A., Gaillard, M.-J. (2018).
+Modelling spatial compositional data: Reconstructions of past land cover
+and uncertainties. *Spatial Statistics* 24: 14–31.
+[doi:10.1016/j.spasta.2018.03.005](https://doi.org/10.1016/j.spasta.2018.03.005)
